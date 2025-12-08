@@ -2,20 +2,30 @@ package main
 
 import (
     "context"
+    "fmt"
+    "io"
     "log"
     "net/http"
     "os"
     "os/signal"
+    "strings"
     "syscall"
     "time"
     
     "go-cms/internal/config"
     "go-cms/internal/database"
     "go-cms/internal/middleware"
-	"go-cms/internal/security"
+    "go-cms/internal/security"
 )
 
 func main() {
+    // Setup security log file
+    securityLog, err := os.OpenFile("security.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+    if err == nil {
+        defer securityLog.Close()
+        log.SetOutput(io.MultiWriter(os.Stdout, securityLog))
+    }
+    
     // Load configuration
     cfg, err := config.Load()
     if err != nil {
@@ -24,9 +34,9 @@ func main() {
     
     logger := log.New(os.Stdout, "CMS: ", log.Ldate|log.Ltime|log.Lshortfile)
     
-    // Initialize database (optional)
+    // Initialize database (optional for now)
     var db *database.DB
-    if cfg.Database.Password != "" {
+    if cfg.Database.Password != "" && cfg.Database.Password != "your_mysql_password" {
         db, err = database.NewMySQLConnection(
             cfg.Database.Host,
             cfg.Database.Port,
@@ -40,6 +50,8 @@ func main() {
             defer db.Close()
             logger.Println("Database connected successfully")
         }
+    } else {
+        logger.Println("Database password not set, running without database")
     }
     
     // Create main router
@@ -60,11 +72,11 @@ func main() {
     
     // Apply middleware
     handler := middleware.Chain(
-		router,
-		middleware.NewWAF().Middleware,  // Gunakan WAF
-		security.NewFirewall().Middleware,
-		middleware.SecurityHeaders(cfg),
-		middleware.RateLimit(100, time.Minute),
+        router,
+        middleware.NewWAF().Middleware,
+        security.NewFirewall().Middleware,
+        middleware.SecurityHeaders(cfg),
+        middleware.RateLimit(100, time.Minute),
     )
     
     // Start server
@@ -119,7 +131,7 @@ func setupAdminRoutes(router *http.ServeMux, db *database.DB) {
         <body>
             <div class="admin-panel">
                 <h1>Go CMS Admin Panel</h1>
-                <p><strong>Security Status:</strong> All security features enabled</p>
+                <p><strong>Security Status:</strong>All security features enabled</p>
                 <ul>
                     <li><a href="/admin/dashboard">Dashboard</a></li>
                     <li><a href="/admin/posts">Posts</a></li>
@@ -152,6 +164,24 @@ func setupAPIRoutes(router *http.ServeMux, db *database.DB) {
         w.Write([]byte(`{"version": "1.0.0", "go_version": "1.18"}`))
     })
     
+    // Security logs endpoint
+    apiRouter.HandleFunc("/logs/security", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        
+        // Read log file if exists
+        logData := "Security logs available in console"
+        if _, err := os.Stat("security.log"); err == nil {
+            data, _ := os.ReadFile("security.log")
+            logData = string(data)
+        }
+        
+        // Escape newlines for JSON
+        escapedLog := strings.ReplaceAll(logData, "\n", "\\n")
+        escapedLog = strings.ReplaceAll(escapedLog, "\"", "\\\"")
+        
+        fmt.Fprintf(w, `{"security_logs": "%s"}`, escapedLog)
+    })
+    
     router.Handle("/api/", http.StripPrefix("/api", apiRouter))
 }
 
@@ -169,6 +199,7 @@ func setupFrontendRoutes(router *http.ServeMux, db *database.DB) {
                 .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
                 .feature { background: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 10px; }
                 .security-badge { background: #27ae60; color: white; padding: 5px 10px; border-radius: 5px; }
+                .attack-log { background: #ffebee; padding: 10px; margin: 10px 0; border-left: 4px solid #f44336; }
             </style>
         </head>
         <body>
@@ -182,13 +213,22 @@ func setupFrontendRoutes(router *http.ServeMux, db *database.DB) {
                 <div class="feature">
                     <h2><span class="security-badge"></span> Security Features</h2>
                     <ul>
-                        <li>Web Application Firewall (WAF)</li>
+                        <li>Web Application Firewall (WAF) - Active</li>
                         <li>SQL Injection Protection</li>
                         <li>XSS & CSRF Protection</li>
                         <li>Rate Limiting & DDoS Protection</li>
-                        <li>Two-Factor Authentication</li>
+                        <li>Real-time Attack Detection</li>
                         <li>Audit Logging</li>
                     </ul>
+                </div>
+                
+                <div class="feature">
+                    <h2>Security Dashboard</h2>
+                    <div class="attack-log">
+                        <strong>Live Attack Monitoring:</strong>
+                        <p>WAF is actively blocking malicious requests</p>
+                        <p><a href="/api/logs/security" target="_blank">View Security Logs</a></p>
+                    </div>
                 </div>
                 
                 <div class="feature">
@@ -196,7 +236,11 @@ func setupFrontendRoutes(router *http.ServeMux, db *database.DB) {
                     <p>Built with Go for maximum performance and concurrency.</p>
                 </div>
                 
-                <p><a href="/admin">Admin Panel</a> | <a href="/api/health">API Health</a></p>
+                <p>
+                    <a href="/admin">Admin Panel</a> | 
+                    <a href="/api/health">API Health</a> | 
+                    <a href="/api/version">Version Info</a>
+                </p>
             </div>
         </body>
         </html>
