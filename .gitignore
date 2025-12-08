@@ -38,4 +38,5 @@ uploads/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
+Thumbs.db.env
+go1.21.0.linux-amd64.tar.gz
