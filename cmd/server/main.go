@@ -8,6 +8,7 @@ import (
     "net/http"
     "os"
     "os/signal"
+    "runtime"
     "strings"
     "syscall"
     "time"
@@ -17,6 +18,9 @@ import (
     "go-cms/internal/middleware"
     "go-cms/internal/security"
 )
+
+// Buat variabel global untuk config
+var appConfig *config.Config
 
 func main() {
     // Setup security log file
@@ -31,6 +35,9 @@ func main() {
     if err != nil {
         log.Fatal("Failed to load config:", err)
     }
+    
+    // Simpan config ke variabel global
+    appConfig = cfg
     
     logger := log.New(os.Stdout, "CMS: ", log.Ldate|log.Ltime|log.Lshortfile)
     
@@ -131,7 +138,7 @@ func setupAdminRoutes(router *http.ServeMux, db *database.DB) {
         <body>
             <div class="admin-panel">
                 <h1>Go CMS Admin Panel</h1>
-                <p><strong>Security Status:</strong>All security features enabled</p>
+                <p><strong>Security Status:</strong> All security features enabled</p>
                 <ul>
                     <li><a href="/admin/dashboard">Dashboard</a></li>
                     <li><a href="/admin/posts">Posts</a></li>
@@ -161,7 +168,82 @@ func setupAPIRoutes(router *http.ServeMux, db *database.DB) {
     
     apiRouter.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Content-Type", "application/json")
-        w.Write([]byte(`{"version": "1.0.0", "go_version": "1.18"}`))
+        
+        // Get actual Go version from runtime
+        goVersion := strings.TrimPrefix(runtime.Version(), "go")
+        
+        // Use appConfig (global variable)
+        env := "development"
+        if appConfig != nil {
+            env = appConfig.Server.Env
+        }
+        
+        fmt.Fprintf(w, `{
+            "version": "1.0.0",
+            "go_version": "%s",
+            "go_runtime": "%s",
+            "build_time": "%s",
+            "environment": "%s",
+            "security": {
+                "waf": "enabled",
+                "firewall": "enabled",
+                "rate_limit": "enabled",
+                "csp": "enabled"
+            }
+        }`, goVersion, runtime.Version(), time.Now().Format(time.RFC3339), env)
+    })
+    
+    apiRouter.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json")
+        
+        // Memory stats
+        var m runtime.MemStats
+        runtime.ReadMemStats(&m)
+        
+        env := "development"
+        host := "0.0.0.0"
+        port := "8080"
+        
+        if appConfig != nil {
+            env = appConfig.Server.Env
+            host = appConfig.Server.Host
+            port = appConfig.Server.Port
+        }
+        
+        fmt.Fprintf(w, `{
+            "server": {
+                "host": "%s",
+                "port": "%s",
+                "environment": "%s"
+            },
+            "runtime": {
+                "go_version": "%s",
+                "compiler": "%s",
+                "goroutines": %d,
+                "cpus": %d
+            },
+            "memory": {
+                "alloc": %d,
+                "total_alloc": %d,
+                "sys": %d,
+                "num_gc": %d
+            },
+            "security": {
+                "status": "active",
+                "waf": true,
+                "firewall": true
+            }
+        }`,
+            host, port, env,
+            strings.TrimPrefix(runtime.Version(), "go"),
+            runtime.Compiler,
+            runtime.NumGoroutine(),
+            runtime.NumCPU(),
+            m.Alloc,
+            m.TotalAlloc,
+            m.Sys,
+            m.NumGC,
+        )
     })
     
     // Security logs endpoint
@@ -239,7 +321,8 @@ func setupFrontendRoutes(router *http.ServeMux, db *database.DB) {
                 <p>
                     <a href="/admin">Admin Panel</a> | 
                     <a href="/api/health">API Health</a> | 
-                    <a href="/api/version">Version Info</a>
+                    <a href="/api/version">Version Info</a> |
+                    <a href="/api/info">System Info</a>
                 </p>
             </div>
         </body>
